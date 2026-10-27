@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepRecap - Free Video Recap Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .overlay-box { position: absolute; cursor: move; touch-action: none; }
+        .resizer { width: 14px; height: 14px; background: #3b82f6; position: absolute; right: -5px; bottom: -5px; cursor: se-resize; border-radius: 50%; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4">
+
+    <!-- Top Navigation -->
+    <div class="w-full max-w-md flex justify-between items-center mb-4 px-2">
+        <h1 class="font-bold text-xl text-gray-800">Recap Studio</h1>
+        <span class="bg-yellow-100 text-yellow-800 text-xs px-3 py-1 rounded-full border border-yellow-300">⚡ အခမဲ့ Free Mode</span>
+    </div>
+
+    <!-- Main Container -->
+    <div class="w-full max-w-md bg-white rounded-3xl shadow-lg p-4 space-y-4">
+        
+        <!-- Upload Section -->
+        <div id="upload-area" class="border-2 border-dashed border-gray-300 rounded-2xl p-6 text-center cursor-pointer hover:bg-gray-50 transition">
+            <input type="file" id="video-input" accept="video/*" class="hidden">
+            <p class="font-semibold text-gray-700">ဗီဒီယို ရွေးချယ်ပါ</p>
+            <p class="text-xs text-gray-400 mt-1">သို့မဟုတ် ဤနေရာသို့ ဆွဲထည့်ပါ</p>
+        </div>
+
+        <!-- Video Player / Canvas Workspace -->
+        <div id="editor-workspace" class="relative hidden w-full rounded-2xl overflow-hidden bg-black aspect-[9/16] flex items-center justify-center">
+            <video id="main-video" class="w-full h-full object-contain" playsinline loop crossorigin="anonymous"></video>
+            
+            <!-- Draggable Subtitle Box -->
+            <div id="subtitle-box" class="overlay-box border-2 border-dashed border-white/60 bg-black/40 text-white text-center px-4 py-2 rounded-lg bottom-10 left-1/2 -translate-x-1/2 w-4/5 text-sm font-semibold shadow-md">
+                ဒီနေရာမှာ မြန်မာစာတန်းထိုး ပေါ်မည်
+            </div>
+
+            <!-- Dynamic Blur Boxes will append here -->
+            <div id="blur-layer" class="absolute inset-0 pointer-events-none"></div>
+
+            <!-- Top Action Controls inside Video -->
+            <div class="absolute top-3 left-3 right-3 flex justify-between z-20">
+                <button id="add-blur-btn" class="bg-black/60 backdrop-blur-md text-white text-xs px-3 py-1.5 rounded-full border border-white/20">+ Add blur</button>
+                <button id="clear-blur-btn" class="bg-black/60 backdrop-blur-md text-white text-xs px-3 py-1.5 rounded-full border border-white/20">Clear Blurs</button>
+            </div>
+        </div>
+
+        <!-- Control Buttons -->
+        <div class="flex gap-2">
+            <button id="settings-btn" class="w-1/2 py-2.5 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100">⚙️ Settings</button>
+            <button id="export-btn" disabled class="w-1/2 py-2.5 rounded-xl bg-black text-white text-sm font-semibold opacity-50 cursor-not-allowed transition">စတင်ထုတ်ယူမည်</button>
+        </div>
+
+        <!-- Progress Status -->
+        <div id="status-text" class="text-center text-xs text-gray-500 hidden">
+            ⏳ ဗီဒီယို ပြင်ဆင်ထုတ်ယူနေပါသည်... ခေတ္တစောင့်ပါ...
+        </div>
+
+    </div>
+
+    <script>
+        const videoInput = document.getElementById('video-input');
+        const uploadArea = document.getElementById('upload-area');
+        const mainVideo = document.getElementById('main-video');
+        const workspace = document.getElementById('editor-workspace');
+        const blurLayer = document.getElementById('blur-layer');
+        const addBlurBtn = document.getElementById('add-blur-btn');
+        const clearBlurBtn = document.getElementById('clear-blur-btn');
+        const exportBtn = document.getElementById('export-btn');
+        const statusText = document.getElementById('status-text');
+
+        let blurCount = 0;
+
+        // Video Upload Logic
+        uploadArea.onclick = () => videoInput.click();
+        videoInput.onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                mainVideo.src = URL.createObjectURL(file);
+                uploadArea.classList.add('hidden');
+                workspace.classList.remove('hidden');
+                exportBtn.disabled = false;
+                exportBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                mainVideo.play();
+            }
+        };
+
+        // Add Blur Mask Logic (Draggable & Resizable)
+        addBlurBtn.onclick = () => {
+            if (blurCount >= 3) return alert('Blur Mask ၃ ခုအထိသာ ထည့်နိုင်ပါသည်။');
+            blurCount++;
+
+            const blurBox = document.createElement('div');
+            blurBox.className = 'overlay-box pointer-events-auto border-2 border-yellow-400 bg-white/20 backdrop-blur-md rounded-md w-36 h-12 top-10 left-10';
+            blurBox.style.backdropFilter = 'blur(12px)';
+
+            const resizer = document.createElement('div');
+            resizer.className = 'resizer';
+            blurBox.appendChild(resizer);
+
+            workspace.appendChild(blurBox);
+            makeDraggable(blurBox);
+            makeResizable(blurBox, resizer);
+        };
+
+        clearBlurBtn.onclick = () => {
+            document.querySelectorAll('.overlay-box:not(#subtitle-box)').forEach(el => el.remove());
+            blurCount = 0;
+        };
+
+        // Drag & Touch Functionality
+        function makeDraggable(element) {
+            let posX = 0, posY = 0, mouseX = 0, mouseY = 0;
+            element.onmousedown = dragMouseDown;
+            element.ontouchstart = dragMouseDown;
+
+            function dragMouseDown(e) {
+                e = e || window.event;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                mouseX = clientX;
+                mouseY = clientY;
+                document.onmouseup = closeDragElement;
+                document.ontouchmove = elementDrag;
+                document.onmousemove = elementDrag;
+                document.ontouchend = closeDragElement;
+            }
+
+            function elementDrag(e) {
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                posX = mouseX - clientX;
+                posY = mouseY - clientY;
+                mouseX = clientX;
+                mouseY = clientY;
+                element.style.top = (element.offsetTop - posY) + "px";
+                element.style.left = (element.offsetLeft - posX) + "px";
+            }
+
+            function closeDragElement() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+                document.ontouchmove = null;
+                document.ontouchend = null;
+            }
+        }
+
+        function makeResizable(element, resizer) {
+            resizer.addEventListener('mousedown', initResize);
+            resizer.addEventListener('touchstart', initResize);
+
+            function initResize(e) {
+                e.stopPropagation();
+                window.addEventListener('mousemove', Resize);
+                window.addEventListener('touchmove', Resize);
+                window.addEventListener('mouseup', stopResize);
+                window.addEventListener('touchend', stopResize);
+            }
+
+            function Resize(e) {
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                element.style.width = (clientX - element.getBoundingClientRect().left) + 'px';
+                element.style.height = (clientY - element.getBoundingClientRect().top) + 'px';
+            }
+
+            function stopResize() {
+                window.removeEventListener('mousemove', Resize);
+                window.removeEventListener('touchmove', Resize);
+            }
+        }
+
+        makeDraggable(document.getElementById('subtitle-box'));
+
+        // Client-Side Canvas Render & Export Video
+        exportBtn.onclick = async () => {
+            statusText.classList.remove('hidden');
+            exportBtn.disabled = true;
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = mainVideo.videoWidth || 720;
+            canvas.height = mainVideo.videoHeight || 1280;
+
+            const stream = canvas.captureStream(30);
+            const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            const chunks = [];
+
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = "DeepRecap_Export.webm";
+                a.click();
+                statusText.classList.add('hidden');
+                exportBtn.disabled = false;
+            };
+
+            recorder.start();
+            mainVideo.currentTime = 0;
+            mainVideo.play();
+
+            function drawFrame() {
+                if (!mainVideo.paused && !mainVideo.ended) {
+                    ctx.drawImage(mainVideo, 0, 0, canvas.width, canvas.height);
+                    requestAnimationFrame(drawFrame);
+                } else {
+                    recorder.stop();
+                }
+            }
+            drawFrame();
+        };
+    </script>
+</body>
+</html>
